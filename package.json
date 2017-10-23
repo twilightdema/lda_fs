@@ -1,0 +1,24 @@
+{
+  "name": "lda_fs",
+  "version": "1.0.0",
+  "description": "LDA Topic Model in pure JAVAScript using LMDB as memory",
+  "main": "lda_fs.js",
+  "scripts": {
+    "test": "node lda_fs.js unittest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/twilightdema/lda_fs.git"
+  },
+  "author": "Chulayuth A.",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/twilightdema/lda_fs/issues"
+  },
+  "homepage": "https://github.com/twilightdema/lda_fs#readme",
+  "dependencies": {
+    "node-lmdb": "^0.4.13",
+    "q": "^1.5.1",
+    "stem-porter": "0.0.1"
+  }
+}

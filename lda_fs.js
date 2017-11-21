@@ -9,7 +9,7 @@ var lmdb = require('node-lmdb');
 
 ///////////////////////////////////////////////////////////////////
 // Utility function to manipulate LMDB as multi-dimentional array
-function LMDBArray(guid, env, name) {
+function LMDBArray(guid, env, name, openExisting = false) {
     this.env = env;
     this.name = name;
     this.autoCommit = true;
@@ -18,9 +18,11 @@ function LMDBArray(guid, env, name) {
         name: name,
         create: true // will create if database did not exist
     });
-    let txn = this.env.beginTxn();
-    txn.putNumber(this.dbi, 'length', 0);
-    txn.commit();
+    if(openExisting === true) {
+        let txn = this.env.beginTxn();
+        txn.putNumber(this.dbi, 'length', 0);
+        txn.commit();
+    }
 }
 LMDBArray.prototype.setTransaction = function(txn) {
     this.txn = txn;
@@ -167,7 +169,7 @@ var process__ = function(sentences, numberOfTopics, numberOfTermsPerTopic, langu
     // ----------
           
     // The result will consist of topics and their included terms [[{"term":"word1", "probability":0.065}, {"term":"word2", "probability":0.047}, ... ], [{"term":"word1", "probability":0.085}, {"term":"word2", "probability":0.024}, ... ]].
-    var result = [];
+    var result = {};
     // Array of stop words
     languages = languages; //  || Array('en'); Nok: no Default!
 
@@ -216,49 +218,77 @@ var process__ = function(sentences, numberOfTopics, numberOfTermsPerTopic, langu
       var K = parseInt(numberOfTopics);
       var alpha = alphaValue || 0.1;  // per-document distributions over topics
       var beta = betaValue || .01;  // per-topic distributions over words
-
+      
       console.log('V (vocab).length = '+V);
       console.log('M (document).length = '+M);
       
-      lda.configure(GUID, env, documents,V, 10000, 200, 100, 10, /*randomSeed*/1);
+      lda.configure(GUID, env, documents,V, 10, 0, 0, 0, /*randomSeed*/1);
       lda.gibbs(K, alpha, beta);
 
       var theta = lda.getTheta();
       var phi = lda.getPhi();
 
-      var text = '';
+      result.topicModel = {};
+      
+      result.topicModel.hypers = {};
+      result.topicModel.hypers.W = V;
+      result.topicModel.hypers.T = K;
+      result.topicModel.hypers.vocab = vocab;
 
-      //topics
-      var topTerms=numberOfTermsPerTopic;
-      for (var k = 0; k < phi.length; k++) {
-          var things = new Array();
-          for (var w = 0; w < phi[k].length; w++) {
-              let vocab_w = vocab.get(w);
-              console.log(""+phi[k][w].toPrecision(2)+"_"+vocab_w + "_" + vocabOrig.get(vocab_w));
-              things.push(""+phi[k][w].toPrecision(2)+"_"+vocab_w + "_" + vocabOrig.get(vocab_w));
-          }
-          things.sort().reverse();
-          //console.log(things);
-          if(topTerms>vocab.length()) topTerms=vocab.length();
+      result.topicModel.priors = {};
+      result.topicModel.priors.alpha = alpha;
+      result.topicModel.priors.beta = beta;
 
-          //console.log('Topic ' + (k + 1));
-          var row = [];
-          
-          for (var t = 0; t < topTerms; t++) {
-              var topicTerm=things[t].split("_")[2];
-              var prob=parseInt(things[t].split("_")[0]*100);
-              if (prob<2) continue;
-              
-              //console.log('Top Term: ' + topicTerm + ' (' + prob + '%)');
-              
-              var term = {};
-              term.term = topicTerm;
-              term.probability = parseFloat(things[t].split("_")[0]);
-              row.push(term);
-          }
+      result.topicModel.posteriors = {};
+      result.topicModel.posteriors.theta = theta;
+      result.topicModel.posteriors.phi = phi;
+      
+      result.topicModel.counters = {};
+      result.topicModel.counters.nw = {type:'lmdb', name:'nw'};
+      result.topicModel.counters.nd = {type:'lmdb', name:'nd'};
+      result.topicModel.counters.nwsum = {type:'lmdb', name:'nwsum'};
+      result.topicModel.counters.ndsum = {type:'lmdb', name:'ndsum'};
+      
+      result.printReadableOutput = function() {
+        
+        var _env = new lmdb.Env();
+        _env.open({
+            path: 'lda_temp/'+GUID,
+            mapSize: 2*1024*1024*1024, // maximum database size
+            maxDbs: 9999
+        });
 
-          result.push(row);
-      }
+        // Vocabulary of unique words (porter stemmed).
+        var _vocab = new LMDBArray(GUID, _env, 'vocab', true);
+        // Vocabulary of unique words in their original form.
+        var _vocabOrig = new LMDBArray(GUID, _env, 'vocabOrig', true);
+        
+        // TODO: May output to string instead
+        // var text = '';
+
+        //topics
+        console.log('=Topic Distribution=');
+        var topTerms=numberOfTermsPerTopic;
+        for (var k = 0; k < phi.length; k++) {
+            var things = new Array();
+            console.log('Topic ' + (k + 1));
+            for (var w = 0; w < phi[k].length; w++) {
+                let vocab_w = _vocab.get(w);
+                things.push(""+phi[k][w].toPrecision(2)+"_"+vocab_w + "_" + _vocabOrig.get(vocab_w));
+            }
+            things.sort().reverse();
+            if(topTerms>vocab.length) topTerms=vocab.length;
+
+            for (var t = 0; t < topTerms; t++) {
+                var topicTerm=things[t].split("_")[2];
+                var prob=parseInt(things[t].split("_")[0]*100);
+                if (prob<2) continue;
+                console.log(topicTerm + ' (' + prob + '%)');              
+            }
+        }
+
+        _env.close();        
+      };
     }
 
     config.dispose();
@@ -272,20 +302,24 @@ var process__ = function(sentences, numberOfTopics, numberOfTermsPerTopic, langu
     return result;
 }
 
-function makeArray(guid, env, name, x) {
-    let a = new LMDBArray(guid, env, name);
-    for(var i=0;i<x;i++)  {
-        a.push(String(0));
-    } // for
+function makeArray(guid, env, name, x, openExisting = false) {
+    let a = new LMDBArray(guid, env, name, openExisting);
+    if(openExisting == false) {
+        for(var i=0;i<x;i++)  {
+            a.push(String(0));
+        } // for
+    }
     return a;
 }
 
-function make2DArray(guid, env, name, x, y) {
-    let a = new LMDBArray(guid, env, name);
-    for(var i=0;i<x;i++)  {
-        a.push(JSON.stringify([]));
-        for (var j=0;j<y;j++) {
-            a.push(String(0), [i]);
+function make2DArray(guid, env, name, x, y, openExisting = false) {
+    let a = new LMDBArray(guid, env, name, openExisting);
+    if(openExisting == false) {
+        for(var i=0;i<x;i++)  {
+            a.push(JSON.stringify([]));
+            for (var j=0;j<y;j++) {
+                a.push(String(0), [i]);
+            }
         }
     }
     return a;
@@ -509,7 +543,8 @@ if(process.argv.length >= 3 && process.argv[2]==='unittest') {
             'เทคโนโลยี่ โลก ธรรมมะ หลุดพ้น ดับทุกข์',
         ];
         var result = process__(sentences, 3, 3, ['th']);
-        console.log(JSON.stringify(result));
+        console.log(JSON.stringify(result.topicModel));
+        result.printReadableOutput();
     } 
     unitTest_LDA();
 }
